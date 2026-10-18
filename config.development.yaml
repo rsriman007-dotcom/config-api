@@ -1,0 +1,2 @@
+workers: 15
+log_level: debug
