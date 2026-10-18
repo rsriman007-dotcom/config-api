@@ -1,25 +1,23 @@
+
 import json
 import time
 import uuid
-from collections import deque
-from datetime import datetime, timezone
-
-from fastapi import Request
-from fastapi.responses import Response
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATESTimport hmac
-from collections import defaultdict
-from fastapi import Header
-
-import redis
-from fastapi import HTTPException
-
+import hmac
 import os
+
+from collections import deque, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
+import redis
 import yaml
+
 from dotenv import dotenv_values
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+
 
 app = FastAPI()
 
@@ -33,18 +31,9 @@ REQUEST_COUNTER = Counter(
 REQUEST_LOGS = deque(maxlen=1000)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-
 redis_client = redis.Redis.from_url(
     REDIS_URL,
     decode_responses=True
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -56,6 +45,14 @@ DEFAULTS = {
     "log_level": "info",
     "api_key": "default-secret-000",
 }
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def normalize(layer, env_layer=False):
@@ -86,31 +83,21 @@ def normalize(layer, env_layer=False):
     return result
 
 
-app = FastAPI()
-
-START_TIME = time.monotonic()
-
-REQUEST_COUNTER = Counter(
-    "http_requests_total",
-    "Total number of HTTP requests"
-)
-
-REQUEST_LOGS = deque(maxlen=1000)
-
-
-# PASTE THE MIDDLEWARE HERE
 @app.middleware("http")
 async def observability_middleware(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request_id = (
+        request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    )
     start = time.monotonic()
-
     REQUEST_COUNTER.inc()
+    level = "INFO"
+    response = None
 
     try:
         response = await call_next(request)
-        level = "INFO"
+        if response.status_code >= 500:
+            level = "ERROR"
     except Exception:
-        response = None
         level = "ERROR"
         raise
     finally:
@@ -120,16 +107,24 @@ async def observability_middleware(request: Request, call_next):
             "path": request.url.path,
             "request_id": request_id,
             "method": request.method,
-            "duration_ms": round((time.monotonic() - start) * 1000, 2)
+            "duration_ms": round(
+                (time.monotonic() - start) * 1000, 2
+            )
         }
 
         REQUEST_LOGS.append(entry)
-        print(json.dumps(entry))
+        print(json.dumps(entry), flush=True)
 
     if response is not None:
         response.headers["X-Request-ID"] = request_id
 
     return response
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
 
 @app.get("/effective-config")
 async def effective_config(
@@ -178,17 +173,15 @@ async def effective_config(
     return config
 
 
-@app.get("/")
-async def health():
-    return {"status": "ok"}
-
 @app.get("/work")
 async def work(n: int = Query(default=1, ge=0)):
     for _ in range(n):
         pass
 
     return {
-        "email": os.getenv("USER_EMAIL", ""),
+        "email": os.getenv(
+            "USER_EMAIL", "25f2003120@ds.study.iitm.ac.in"
+        ),
         "done": n
     }
 
@@ -210,7 +203,9 @@ async def healthz():
 
 
 @app.get("/logs/tail")
-async def logs_tail(limit: int = Query(default=100, ge=1, le=1000)):
+async def logs_tail(
+    limit: int = Query(default=100, ge=1, le=1000)
+):
     return list(REQUEST_LOGS)[-limit:]
 
 
@@ -220,16 +215,25 @@ async def hit(key: str):
         count = redis_client.incr(f"hit:{key}")
         return {"key": key, "count": count}
     except redis.RedisError:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
+        raise HTTPException(
+            status_code=503, detail="Redis unavailable"
+        )
 
 
 @app.get("/count/{key}")
 async def count(key: str):
     try:
         value = redis_client.get(f"hit:{key}")
-        return {"key": key, "count": int(value) if value else 0}
+        return {
+            "key": key,
+            "count": int(value) if value else 0
+        }
     except redis.RedisError:
-        raise HTTPException(status_code=503, detail="Redis unavailable")
+        raise HTTPException(
+            status_code=503, detail="Redis unavailable"
+        )
+
+
 @app.post("/analytics")
 async def analytics(
     body: dict,
@@ -242,7 +246,9 @@ async def analytics(
         or not x_api_key
         or not hmac.compare_digest(x_api_key, expected_key)
     ):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(
+            status_code=401, detail="Unauthorized"
+        )
 
     events = body.get("events", [])
     user_totals = defaultdict(float)
@@ -256,7 +262,10 @@ async def analytics(
             revenue += amount
             user_totals[user] += amount
 
-    top_user = max(user_totals, key=user_totals.get) if user_totals else None
+    top_user = (
+        max(user_totals, key=user_totals.get)
+        if user_totals else None
+    )
 
     return {
         "email": "25f2003120@ds.study.iitm.ac.in",

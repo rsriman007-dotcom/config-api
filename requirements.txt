@@ -1,6 +1,6 @@
 fastapi
-uvicorn[standard]
+uvicorn
+redis
 PyYAML
 python-dotenv
-redis
 prometheus-client
