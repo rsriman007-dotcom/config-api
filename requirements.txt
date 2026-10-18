@@ -3,3 +3,4 @@ uvicorn[standard]
 PyYAML
 python-dotenv
 redis
+prometheus-client

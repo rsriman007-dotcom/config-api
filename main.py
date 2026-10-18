@@ -1,4 +1,12 @@
-import hmac
+import json
+import time
+import uuid
+from collections import deque
+from datetime import datetime, timezone
+
+from fastapi import Request
+from fastapi.responses import Response
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATESTimport hmac
 from collections import defaultdict
 from fastapi import Header
 
@@ -14,6 +22,15 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+START_TIME = time.monotonic()
+
+REQUEST_COUNTER = Counter(
+    "http_requests_total",
+    "Total number of HTTP requests"
+)
+
+REQUEST_LOGS = deque(maxlen=1000)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -69,6 +86,51 @@ def normalize(layer, env_layer=False):
     return result
 
 
+app = FastAPI()
+
+START_TIME = time.monotonic()
+
+REQUEST_COUNTER = Counter(
+    "http_requests_total",
+    "Total number of HTTP requests"
+)
+
+REQUEST_LOGS = deque(maxlen=1000)
+
+
+# PASTE THE MIDDLEWARE HERE
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    start = time.monotonic()
+
+    REQUEST_COUNTER.inc()
+
+    try:
+        response = await call_next(request)
+        level = "INFO"
+    except Exception:
+        response = None
+        level = "ERROR"
+        raise
+    finally:
+        entry = {
+            "level": level,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "path": request.url.path,
+            "request_id": request_id,
+            "method": request.method,
+            "duration_ms": round((time.monotonic() - start) * 1000, 2)
+        }
+
+        REQUEST_LOGS.append(entry)
+        print(json.dumps(entry))
+
+    if response is not None:
+        response.headers["X-Request-ID"] = request_id
+
+    return response
+
 @app.get("/effective-config")
 async def effective_config(
     set_: list[str] = Query(default=[], alias="set")
@@ -120,16 +182,36 @@ async def effective_config(
 async def health():
     return {"status": "ok"}
 
+@app.get("/work")
+async def work(n: int = Query(default=1, ge=0)):
+    for _ in range(n):
+        pass
+
+    return {
+        "email": os.getenv("USER_EMAIL", ""),
+        "done": n
+    }
+
+
+@app.get("/metrics")
+async def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+
 @app.get("/healthz")
 async def healthz():
-    try:
-        redis_client.ping()
-        return {"status": "ok", "redis": "up"}
-    except redis.RedisError:
-        raise HTTPException(
-            status_code=503,
-            detail={"status": "error", "redis": "down"}
-        )
+    return {
+        "status": "ok",
+        "uptime_s": max(0.0, time.monotonic() - START_TIME)
+    }
+
+
+@app.get("/logs/tail")
+async def logs_tail(limit: int = Query(default=100, ge=1, le=1000)):
+    return list(REQUEST_LOGS)[-limit:]
 
 
 @app.post("/hit/{key}")
