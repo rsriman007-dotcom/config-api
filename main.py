@@ -153,7 +153,7 @@ async def analytics(
     body: dict,
     x_api_key: str = Header(default=None, alias="X-API-Key")
 ):
-    expected_key = os.getenv("ANALYTICS_API_KEY", "")
+    expected_key = os.getenv("ak_ok9n3ya8pjocc2yoy4ac1bue", "")
 
     if not expected_key or not x_api_key or not hmac.compare_digest(
         x_api_key, expected_key
