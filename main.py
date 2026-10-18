@@ -1,3 +1,7 @@
+import hmac
+from collections import defaultdict
+from fastapi import Header
+
 import redis
 from fastapi import HTTPException
 
@@ -144,3 +148,36 @@ async def count(key: str):
         return {"key": key, "count": int(value) if value else 0}
     except redis.RedisError:
         raise HTTPException(status_code=503, detail="Redis unavailable")
+@app.post("/analytics")
+async def analytics(
+    body: dict,
+    x_api_key: str = Header(default=None, alias="X-API-Key")
+):
+    expected_key = os.getenv("ANALYTICS_API_KEY", "")
+
+    if not expected_key or not x_api_key or not hmac.compare_digest(
+        x_api_key, expected_key
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    events = body.get("events", [])
+    user_totals = defaultdict(float)
+    revenue = 0.0
+
+    for event in events:
+        user = event["user"]
+        amount = float(event["amount"])
+
+        if amount > 0:
+            revenue += amount
+            user_totals[user] += amount
+
+    top_user = max(user_totals, key=user_totals.get) if user_totals else None
+
+    return {
+        "email": os.getenv("USER_EMAIL", ""),
+        "total_events": len(events),
+        "unique_users": len({event["user"] for event in events}),
+        "revenue": revenue,
+        "top_user": top_user
+    }
