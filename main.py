@@ -1,3 +1,5 @@
+import redis
+from fastapi import HTTPException
 
 import os
 from pathlib import Path
@@ -8,6 +10,13 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+redis_client = redis.Redis.from_url(
+    REDIS_URL,
+    decode_responses=True
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,7 +118,29 @@ async def health():
 
 @app.get("/healthz")
 async def healthz():
-    return {
-        "status": "ok",
-        "redis": "up"
-    }
+    try:
+        redis_client.ping()
+        return {"status": "ok", "redis": "up"}
+    except redis.RedisError:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "error", "redis": "down"}
+        )
+
+
+@app.post("/hit/{key}")
+async def hit(key: str):
+    try:
+        count = redis_client.incr(f"hit:{key}")
+        return {"key": key, "count": count}
+    except redis.RedisError:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+
+
+@app.get("/count/{key}")
+async def count(key: str):
+    try:
+        value = redis_client.get(f"hit:{key}")
+        return {"key": key, "count": int(value) if value else 0}
+    except redis.RedisError:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
