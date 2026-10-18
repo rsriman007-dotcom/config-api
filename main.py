@@ -177,7 +177,7 @@ async def analytics(
     top_user = max(user_totals, key=user_totals.get) if user_totals else None
 
     return {
-        "email": os.getenv("USER_EMAIL", ""),
+        "email": "25f2003120@ds.study.iitm.ac.in",
         "total_events": len(events),
         "unique_users": len({event["user"] for event in events}),
         "revenue": revenue,
